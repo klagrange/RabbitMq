@@ -29,8 +29,12 @@ interface IActions {
   WATCH_RDS: {
     readonly action: IAction,
     readonly messageFormat: {
-      name: string;
-      age: number;
+      tryAttemp: number;
+      isValid: boolean;
+      body: {
+        name: string;
+        age: number;
+      }
     }
   },}
 
@@ -73,13 +77,20 @@ class Newbie {
               opts: { durable: true }
             },
             publish: {
-              opts: { headers: { 'x-delay': 5000 }}
+              opts: { headers: { 'x-delay': 200 }}
             },
             consume: {
               opts: { noAck: false }
             }
           },
-          messageFormat: { name: 'example', age: 0 }
+          messageFormat: { 
+            tryAttemp: 1,
+            isValid: false,
+            body: {
+              name: 'example',
+              age: 0 
+            }
+          }
         },
     }      
   }
@@ -103,90 +114,80 @@ class Newbie {
         action.exchange.type,
         action.exchange.opts);
       const publish = async (msgObj: Object) => {
-        await ch.publish(
+        const res = await ch.publish(
           action.exchange.name,
           action.key,
           Buffer.from(JSON.stringify(msgObj)),
           action.publish.opts)
+        return res;
       }
       return { clean, publish };
     }
 
     async function consumer(self: Newbie) {
-      const { ch, clean } = await self.getCh();
+      const { publish, clean: cleanPublishCh } = await publisher(self);
+      const { ch, clean: cleanConsumeCh } = await self.getCh();
       await ch.assertQueue(action.key, action.queue.opts);
       await ch.bindQueue(action.key, action.exchange.name, action.key);
-      const consume = async (callback: (res: amqp.ConsumeMessage, msg: any) => any) => {
-        await ch.consume(action.key, (res) => {
-          const msg = JSON.parse(res.content.toString());
-          callback(res, msg);
-        }, action.consume.opts);
+      const consume = async (onReceive: (res: amqp.ConsumeMessage) => any) => {
+        await ch.consume(action.key, onReceive, action.consume.opts);
       }
-      return { consume, clean };
+      return { ch, consume, cleanConsumeCh, publish, cleanPublishCh };
     }
 
-    return { 
-      publisher: await publisher(this),
-      consumer: await consumer(this),
-    }
-  }
-
-  async test() {
-    const { action, messageFormat } = this.ACTIONS.TEST;
-    const { publisher, consumer } = await this.getX(action);
-
-    const publish = async (msgObj: typeof messageFormat) => {
-      await publisher.publish(msgObj);
-    }
-
-    const consume = async (callback: (res: amqp.ConsumeMessage, msg: typeof messageFormat) => any) => {
-      await consumer.consume(callback);
-    }
-
-    return {
-      publisher: {...publisher, publish },
-      consumer: {...consumer, consume }
-    }
+    return await consumer(this);
   }
 
   async watchRds() {
     const { action, messageFormat } = this.ACTIONS.WATCH_RDS;
-    const { publisher, consumer } = await this.getX(action);
+    const x = await this.getX(action);
 
     const publish = async (msgObj: typeof messageFormat) => {
-      await publisher.publish(msgObj);
+      await x.publish(msgObj);
     }
 
-    const consume = async (callback: (res: amqp.ConsumeMessage, msg: typeof messageFormat) => any) => {
-      await consumer.consume(callback);
-    }
+    const consume = async (isRdsReady: (msg: any) => boolean) => {
+      await x.consume(async (res) => {
+        const msg: typeof messageFormat = JSON.parse(res.content.toString());
 
-    return {
-      publisher: {...publisher, publish },
-      consumer: {...consumer, consume }
+        // ack original msg
+        x.ch.ack(res);
+
+        const isValid = isRdsReady(msg);
+
+        // resend
+        if (!isValid && msg.tryAttemp < 5) {
+          await publish({
+            ...msg,
+            tryAttemp: msg.tryAttemp + 1,
+            isValid: false
+          })
+        } else {
+          await x.cleanPublishCh();
+        }
+      })
     }
+    return { ...x, publish, consume };
   }
-
 }
 
 async function run() {
   const newbie = new Newbie('amqp://localhost');
-  const test = await newbie.watchRds();
+  const { publish, consume } = await newbie.watchRds();
 
-  test.consumer.consume((res, msg) => {
-    console.log(res);
-    console.log(msg)
-  });
+  publish({
+    tryAttemp: 1,
+    isValid: false,
+    body: {
+      name: 'Keith',
+      age: 25
+    }    
+  })
 
-  // test.publisher.publish({
-  //   name: 'Keith',
-  //   age: 1
-  // });
-
-  // test.publisher.publish({
-  //   name: 'Keith',
-  //   age: 2
-  // });
+  await consume((msg => {
+    console.log(msg);
+    return true;
+  }));
 }
 
 run();

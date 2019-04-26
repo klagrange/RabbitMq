@@ -59,7 +59,6 @@ async function consumer() {
 async function run() {
   // const { publish } = await publisher();
   // const a = await publish({
-  //   n: 1,
   //   tryAttemp: 1,
   //   isValid: false
   // });
