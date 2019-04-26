@@ -1,0 +1,16 @@
+{
+  "name": "rabbit",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/amqplib": "^0.5.11",
+    "@types/typescript": "^2.0.0",
+    "amqplib": "^0.5.3"
+  }
+}
